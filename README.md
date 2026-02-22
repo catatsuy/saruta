@@ -42,25 +42,152 @@ func main() {
 	})
 
 	r.Get("/health", func(w http.ResponseWriter, req *http.Request) {
-		_, _ = w.Write([]byte("ok"))
+		w.Write([]byte("ok"))
 	})
 
 	r.Get("/users/{id}", func(w http.ResponseWriter, req *http.Request) {
-		_, _ = w.Write([]byte("user=" + req.PathValue("id")))
+		w.Write([]byte("user=" + req.PathValue("id")))
 	})
 
 	r.Get("/api/{name:[0-9]+}.json", func(w http.ResponseWriter, req *http.Request) {
-		_, _ = w.Write([]byte("name=" + req.PathValue("name")))
+		w.Write([]byte("name=" + req.PathValue("name")))
 	})
 
 	r.Get("/files/{path...}", func(w http.ResponseWriter, req *http.Request) {
-		_, _ = w.Write([]byte("file=" + req.PathValue("path")))
+		w.Write([]byte("file=" + req.PathValue("path")))
 	})
 
-	// Validate and compile all routes before starting the server.
-	r.MustCompile()
+	if err := r.Compile(); err != nil {
+		log.Fatal(err)
+	}
 
 	log.Fatal(http.ListenAndServe(":8080", r))
+}
+```
+
+## More Examples
+
+### Grouped middleware
+
+```go
+r := saruta.New()
+
+loggingMiddleware := func(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		log.Printf("%s %s", req.Method, req.URL.Path)
+		next.ServeHTTP(w, req)
+	})
+}
+
+authMiddleware := func(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Header.Get("Authorization") == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, req)
+	})
+}
+
+r.Use(loggingMiddleware)
+
+r.Group(func(api *saruta.Router) {
+	api.Use(authMiddleware)
+
+	api.Get("/me", func(w http.ResponseWriter, req *http.Request) {
+		w.Write([]byte("ok"))
+	})
+})
+
+r.MustCompile()
+```
+
+### Mount another handler
+
+```go
+files := http.FileServer(http.Dir("./public"))
+r.Mount("/static", files)
+r.MustCompile()
+```
+
+`Mount` matches a static prefix and forwards the original path (no stripping).
+
+### Custom 404 / 405 handlers
+
+```go
+r.NotFound(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	http.Error(w, "custom not found", http.StatusNotFound)
+}))
+
+r.MethodNotAllowed(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	http.Error(w, "custom method not allowed", http.StatusMethodNotAllowed)
+}))
+```
+
+### Startup panic mode
+
+```go
+r := saruta.New(saruta.WithPanicOnCompileError())
+r.Get("/users/{id}", usersShow)
+r.Get("/users/{name}", usersShow) // conflict
+
+// Panics instead of returning an error.
+r.Compile()
+```
+
+If you prefer explicit error handling:
+
+```go
+if err := r.Compile(); err != nil {
+	log.Fatal(err)
+}
+```
+
+### Graceful shutdown
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+	"net/http"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/catatsuy/saruta"
+)
+
+func main() {
+	r := saruta.New()
+	r.Get("/health", func(w http.ResponseWriter, req *http.Request) {
+		w.Write([]byte("ok"))
+	})
+	r.MustCompile()
+
+	srv := &http.Server{
+		Addr:    ":8080",
+		Handler: r,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		<-ctx.Done()
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("shutdown error: %v", err)
+		}
+	}()
+
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
 }
 ```
 

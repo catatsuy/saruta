@@ -36,12 +36,17 @@ type registeredMount struct {
 
 type Option func(*Router)
 
+// WithPanicOnCompileError makes Compile panic instead of returning an error.
 func WithPanicOnCompileError() Option {
 	return func(r *Router) {
 		r.state.panicOnCompileErr = true
 	}
 }
 
+// New creates a new Router.
+//
+// Register routes with Get/Post/Handle, then call Compile or MustCompile
+// before serving requests.
 func New(opts ...Option) *Router {
 	r := &Router{
 		state: &routerState{},
@@ -54,6 +59,9 @@ func New(opts ...Option) *Router {
 	return r
 }
 
+// Handle registers a route for method and pattern.
+//
+// Validation and conflict detection are deferred until Compile.
 func (r *Router) Handle(method, pattern string, h http.Handler) {
 	r.state.routes = append(r.state.routes, registeredRoute{
 		method:     method,
@@ -64,42 +72,53 @@ func (r *Router) Handle(method, pattern string, h http.Handler) {
 	r.state.compiled = false
 }
 
+// HandleFunc is like Handle but accepts http.HandlerFunc.
 func (r *Router) HandleFunc(method, pattern string, h http.HandlerFunc) {
 	r.Handle(method, pattern, h)
 }
 
+// Get registers a GET route.
 func (r *Router) Get(pattern string, h http.HandlerFunc) {
 	r.HandleFunc(http.MethodGet, pattern, h)
 }
 
+// Post registers a POST route.
 func (r *Router) Post(pattern string, h http.HandlerFunc) {
 	r.HandleFunc(http.MethodPost, pattern, h)
 }
 
+// Put registers a PUT route.
 func (r *Router) Put(pattern string, h http.HandlerFunc) {
 	r.HandleFunc(http.MethodPut, pattern, h)
 }
 
+// Patch registers a PATCH route.
 func (r *Router) Patch(pattern string, h http.HandlerFunc) {
 	r.HandleFunc(http.MethodPatch, pattern, h)
 }
 
+// Delete registers a DELETE route.
 func (r *Router) Delete(pattern string, h http.HandlerFunc) {
 	r.HandleFunc(http.MethodDelete, pattern, h)
 }
 
+// Head registers a HEAD route.
 func (r *Router) Head(pattern string, h http.HandlerFunc) {
 	r.HandleFunc(http.MethodHead, pattern, h)
 }
 
+// Options registers an OPTIONS route.
 func (r *Router) Options(pattern string, h http.HandlerFunc) {
 	r.HandleFunc(http.MethodOptions, pattern, h)
 }
 
+// Use appends router-level middleware for subsequent route registrations.
 func (r *Router) Use(mw ...Middleware) {
 	r.middleware = append(r.middleware, mw...)
 }
 
+// With returns a derived router sharing the same route set and compile target,
+// but with additional middleware applied to routes registered via the derived router.
 func (r *Router) With(mw ...Middleware) *Router {
 	combined := make([]Middleware, 0, len(r.middleware)+len(mw))
 	combined = append(combined, r.middleware...)
@@ -110,6 +129,7 @@ func (r *Router) With(mw ...Middleware) *Router {
 	}
 }
 
+// Group calls fn with a derived router (equivalent to fn(r.With())).
 func (r *Router) Group(fn func(r *Router)) {
 	if fn == nil {
 		return
@@ -117,6 +137,10 @@ func (r *Router) Group(fn func(r *Router)) {
 	fn(r.With())
 }
 
+// Mount delegates a static path prefix to another handler.
+//
+// Prefix validation happens in Compile. Mounted handlers receive the original
+// request path (no path stripping).
 func (r *Router) Mount(prefix string, h http.Handler) {
 	r.state.mounts = append(r.state.mounts, registeredMount{
 		prefix:  prefix,
@@ -125,6 +149,7 @@ func (r *Router) Mount(prefix string, h http.Handler) {
 	r.state.compiled = false
 }
 
+// Compile validates registered routes and builds the runtime radix tree.
 func (r *Router) Compile() error {
 	root := newNode()
 
@@ -168,20 +193,30 @@ func (r *Router) Compile() error {
 	return nil
 }
 
+// MustCompile is like Compile but panics on error.
 func (r *Router) MustCompile() {
 	if err := r.Compile(); err != nil {
 		panic(err)
 	}
 }
 
+// NotFound sets the handler used when no route matches.
+//
+// Router middleware added with Use is not applied to this handler.
 func (r *Router) NotFound(h http.Handler) {
 	r.state.notFound = h
 }
 
+// MethodNotAllowed sets the handler used when the path matches but the method does not.
+//
+// Router middleware added with Use is not applied to this handler.
 func (r *Router) MethodNotAllowed(h http.Handler) {
 	r.state.methodNotAllowed = h
 }
 
+// ServeHTTP implements http.Handler.
+//
+// The router must be compiled before it is used.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if !r.state.compiled || r.state.root == nil {
 		panic("saruta: router is not compiled; call Compile or MustCompile before serving")
