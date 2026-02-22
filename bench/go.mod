@@ -1,0 +1,12 @@
+module github.com/catatsuy/saruta/bench
+
+go 1.25
+
+require github.com/catatsuy/saruta v0.0.0
+
+require (
+	github.com/go-chi/chi/v5 v5.2.5 // indirect
+	github.com/julienschmidt/httprouter v1.3.0 // indirect
+)
+
+replace github.com/catatsuy/saruta => ..
