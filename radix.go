@@ -22,6 +22,7 @@ type paramEdge struct {
 	prefix  string
 	suffix  string
 	matcher segmentMatcher
+	tmpl    *segmentTemplate
 	next    *node
 }
 
@@ -55,6 +56,7 @@ type radixParamEdge struct {
 	prefix  string
 	suffix  string
 	matcher segmentMatcher
+	tmpl    *segmentTemplate
 	next    *radixNode
 }
 
@@ -83,9 +85,10 @@ func (n *node) insertRoute(method, pattern string, cp compiledPattern, h http.Ha
 					prefix:  seg.prefix,
 					suffix:  seg.suffix,
 					matcher: seg.matcher,
+					tmpl:    seg.tmpl,
 					next:    newNode(),
 				}
-			} else if cur.paramChild.name != seg.name || cur.paramChild.expr != seg.expr || cur.paramChild.prefix != seg.prefix || cur.paramChild.suffix != seg.suffix {
+			} else if !sameSegmentTemplate(cur.paramChild.tmpl, seg.tmpl) {
 				return fmt.Errorf("route conflict: %s %s conflicts with existing parameter {%s}", method, pattern, cur.paramChild.name)
 			}
 			cur = cur.paramChild.next
@@ -144,10 +147,16 @@ func storeParam(params *[8]pathParam, count int, p pathParam) (int, bool) {
 }
 
 func (pe *paramEdge) matchSegment(seg string) (string, bool) {
+	if pe.tmpl != nil && len(pe.tmpl.params) > 1 {
+		return "", false
+	}
 	return matchParamSegment(seg, pe.prefix, pe.suffix, pe.matcher)
 }
 
 func (pe *radixParamEdge) matchSegment(seg string) (string, bool) {
+	if pe.tmpl != nil && len(pe.tmpl.params) > 1 {
+		return "", false
+	}
 	return matchParamSegment(seg, pe.prefix, pe.suffix, pe.matcher)
 }
 
@@ -201,6 +210,7 @@ func buildRadixNode(src *node) *radixNode {
 			prefix:  src.paramChild.prefix,
 			suffix:  src.paramChild.suffix,
 			matcher: src.paramChild.matcher,
+			tmpl:    src.paramChild.tmpl,
 			next:    buildRadixNode(src.paramChild.next),
 		}
 	}
@@ -267,12 +277,10 @@ func (n *radixNode) matchPath(path string, pos int, params *[8]pathParam, paramC
 
 	if pe := n.paramChild; pe != nil {
 		if seg, nextPos, ok := nextSegmentAt(path, pos); ok {
-			if value, ok := pe.matchSegment(seg); ok {
-				nextCount, ok := storeParam(params, paramCount, pathParam{name: pe.name, value: value})
-				if ok {
-					if leaf, count, ok := pe.next.matchPath(path, nextPos, params, nextCount); ok {
-						return leaf, count, true
-					}
+			nextCount, ok := pe.storeSegmentParams(seg, params, paramCount)
+			if ok {
+				if leaf, count, ok := pe.next.matchPath(path, nextPos, params, nextCount); ok {
+					return leaf, count, true
 				}
 			}
 		}
@@ -435,4 +443,99 @@ func (n *radixNode) staticEdgeFor(first byte) *radixStaticEdge {
 		return nil
 	}
 	return &n.staticEdges[int(idx)-1]
+}
+
+func (pe *radixParamEdge) storeSegmentParams(seg string, params *[8]pathParam, count int) (int, bool) {
+	if pe.tmpl == nil || len(pe.tmpl.params) <= 1 {
+		value, ok := pe.matchSegment(seg)
+		if !ok {
+			return count, false
+		}
+		return storeParam(params, count, pathParam{name: pe.name, value: value})
+	}
+	return matchTemplateAndStore(pe.tmpl, seg, params, count)
+}
+
+func matchTemplateAndStore(tmpl *segmentTemplate, seg string, params *[8]pathParam, count int) (int, bool) {
+	if tmpl == nil {
+		return count, false
+	}
+	pos := 0
+	for i, p := range tmpl.params {
+		prefix := tmpl.literals[i]
+		if !strings.HasPrefix(seg[pos:], prefix) {
+			return count, false
+		}
+		pos += len(prefix)
+
+		nextLit := tmpl.literals[i+1]
+		var value string
+		if i == len(tmpl.params)-1 {
+			if !strings.HasSuffix(seg, nextLit) {
+				return count, false
+			}
+			end := len(seg) - len(nextLit)
+			if end < pos {
+				return count, false
+			}
+			value = seg[pos:end]
+			if p.matcher != nil && !p.matcher.Match(value) {
+				return count, false
+			}
+			pos = end
+		} else {
+			if nextLit == "" {
+				return count, false
+			}
+			searchStart := pos
+			matched := false
+			for {
+				rel := strings.Index(seg[searchStart:], nextLit)
+				if rel < 0 {
+					return count, false
+				}
+				end := searchStart + rel
+				value = seg[pos:end]
+				if p.matcher == nil || p.matcher.Match(value) {
+					pos = end
+					matched = true
+					break
+				}
+				searchStart = end + 1
+			}
+			if !matched {
+				return count, false
+			}
+		}
+		var ok bool
+		count, ok = storeParam(params, count, pathParam{name: p.name, value: value})
+		if !ok {
+			return count, false
+		}
+	}
+	if pos != len(seg)-len(tmpl.literals[len(tmpl.literals)-1]) {
+		// last literal should be consumed by suffix check
+		return count, false
+	}
+	return count, true
+}
+
+func sameSegmentTemplate(a, b *segmentTemplate) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if len(a.literals) != len(b.literals) || len(a.params) != len(b.params) {
+		return false
+	}
+	for i := range a.literals {
+		if a.literals[i] != b.literals[i] {
+			return false
+		}
+	}
+	for i := range a.params {
+		if a.params[i].name != b.params[i].name || a.params[i].expr != b.params[i].expr {
+			return false
+		}
+	}
+	return true
 }

@@ -29,6 +29,18 @@ type segment struct {
 	prefix  string
 	suffix  string
 	matcher segmentMatcher
+	tmpl    *segmentTemplate
+}
+
+type segmentTemplate struct {
+	literals []string
+	params   []templateParam
+}
+
+type templateParam struct {
+	name    string
+	expr    string
+	matcher segmentMatcher
 }
 
 type byteClassMatcher struct {
@@ -83,25 +95,62 @@ func parseSegment(raw string) (segment, error) {
 		return segment{kind: segmentStatic, literal: raw}, nil
 	}
 
-	open := strings.IndexByte(raw, '{')
-	close := strings.IndexByte(raw, '}')
-	if open < 0 || close < 0 || close < open {
+	var literals []string
+	var params []templateParam
+	last := 0
+	for i := 0; i < len(raw); i++ {
+		switch raw[i] {
+		case '}':
+			return segment{}, fmt.Errorf("invalid segment syntax %q", raw)
+		case '{':
+			j := strings.IndexByte(raw[i+1:], '}')
+			if j < 0 {
+				return segment{}, fmt.Errorf("invalid segment syntax %q", raw)
+			}
+			j = i + 1 + j
+			if strings.Contains(raw[i+1:j], "{") {
+				return segment{}, fmt.Errorf("invalid segment syntax %q", raw)
+			}
+			literals = append(literals, raw[last:i])
+			body := raw[i+1 : j]
+			if body == "" {
+				return segment{}, fmt.Errorf("empty parameter name")
+			}
+			if strings.HasSuffix(body, "...") {
+				if len(params) > 0 || i != 0 || j != len(raw)-1 {
+					return segment{}, fmt.Errorf("catch-all cannot have static prefix/suffix in segment")
+				}
+				return parseParamBody(body, "", "")
+			}
+			p, err := parseSegmentParam(body)
+			if err != nil {
+				return segment{}, err
+			}
+			params = append(params, p)
+			i = j
+			last = j + 1
+		}
+	}
+	literals = append(literals, raw[last:])
+	if len(params) == 0 {
 		return segment{}, fmt.Errorf("invalid segment syntax %q", raw)
 	}
-	if strings.Count(raw, "{") != 1 || strings.Count(raw, "}") != 1 {
-		return segment{}, fmt.Errorf("invalid segment syntax %q", raw)
+	for i := 1; i < len(literals)-1; i++ {
+		if literals[i] == "" {
+			return segment{}, fmt.Errorf("adjacent parameters in one segment are not supported")
+		}
 	}
-
-	prefix := raw[:open]
-	suffix := raw[close+1:]
-	body := raw[open+1 : close]
-	if body == "" {
-		return segment{}, fmt.Errorf("empty parameter name")
+	tmpl := &segmentTemplate{literals: literals, params: params}
+	seg := segment{
+		kind: segmentParam,
+		tmpl: tmpl,
 	}
-
-	seg, err := parseParamBody(body, prefix, suffix)
-	if err != nil {
-		return segment{}, err
+	if len(params) == 1 {
+		seg.name = params[0].name
+		seg.expr = params[0].expr
+		seg.matcher = params[0].matcher
+		seg.prefix = literals[0]
+		seg.suffix = literals[1]
 	}
 	return seg, nil
 }
@@ -124,21 +173,13 @@ func parseParamBody(body, prefix, suffix string) (segment, error) {
 	name := body
 	expr := ""
 	var matcher segmentMatcher
-	if before, after, ok := strings.Cut(body, ":"); ok {
-		name = before
-		expr = after
-		if expr == "" {
-			return segment{}, fmt.Errorf("empty parameter expression")
-		}
-		var err error
-		matcher, err = compileSegmentExpr(expr)
-		if err != nil {
-			return segment{}, fmt.Errorf("invalid matcher for parameter %q: %w", name, err)
-		}
-	}
-	if err := validateParamName(name); err != nil {
+	p, err := parseSegmentParam(body)
+	if err != nil {
 		return segment{}, err
 	}
+	name = p.name
+	expr = p.expr
+	matcher = p.matcher
 	return segment{
 		kind:    segmentParam,
 		name:    name,
@@ -146,7 +187,33 @@ func parseParamBody(body, prefix, suffix string) (segment, error) {
 		prefix:  prefix,
 		suffix:  suffix,
 		matcher: matcher,
+		tmpl: &segmentTemplate{
+			literals: []string{prefix, suffix},
+			params:   []templateParam{p},
+		},
 	}, nil
+}
+
+func parseSegmentParam(body string) (templateParam, error) {
+	name := body
+	expr := ""
+	var matcher segmentMatcher
+	if before, after, ok := strings.Cut(body, ":"); ok {
+		name = before
+		expr = after
+		if expr == "" {
+			return templateParam{}, fmt.Errorf("empty parameter expression")
+		}
+		var err error
+		matcher, err = compileSegmentExpr(expr)
+		if err != nil {
+			return templateParam{}, fmt.Errorf("invalid matcher for parameter %q: %w", name, err)
+		}
+	}
+	if err := validateParamName(name); err != nil {
+		return templateParam{}, err
+	}
+	return templateParam{name: name, expr: expr, matcher: matcher}, nil
 }
 
 func compileSegmentExpr(expr string) (segmentMatcher, error) {

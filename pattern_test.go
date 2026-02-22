@@ -12,6 +12,7 @@ func TestCompilePatternValid(t *testing.T) {
 		{pattern: "/users/{id}", kinds: []segmentKind{segmentStatic, segmentParam}},
 		{pattern: `/users/{id:\d+}`, kinds: []segmentKind{segmentStatic, segmentParam}},
 		{pattern: `/api/{name:[0-9]+}.json`, kinds: []segmentKind{segmentStatic, segmentParam}},
+		{pattern: `/image/{id:[a-z0-9]+}.{ext:[a-z]+}`, kinds: []segmentKind{segmentStatic, segmentParam}},
 		{pattern: `/assets/pre-{id:[0-9]+}-v1`, kinds: []segmentKind{segmentStatic, segmentParam}},
 		{pattern: "/files/{path...}", kinds: []segmentKind{segmentStatic, segmentCatchAll}},
 		{pattern: "/users/", kinds: []segmentKind{segmentStatic, segmentStatic}},
@@ -45,6 +46,7 @@ func TestCompilePatternInvalid(t *testing.T) {
 		"/users/{id:}",
 		"/files/{path...:[0-9]+}",
 		"/api/{id:[0-9]+}{x}",
+		"/image/{id:[a-z0-9]+}{ext:[a-z]+}",
 		"/api/x{id...}.json",
 	}
 	for _, pattern := range tests {

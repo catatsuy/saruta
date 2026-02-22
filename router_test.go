@@ -100,6 +100,29 @@ func TestRouterConstrainedParamWithSuffix(t *testing.T) {
 	}
 }
 
+func TestRouterMultipleParamsInOneSegment(t *testing.T) {
+	r := New()
+	r.Get(`/image/{id:[a-z0-9]+}.{ext:[a-z]+}`, func(w http.ResponseWriter, req *http.Request) {
+		w.Write([]byte(req.PathValue("id") + ":" + req.PathValue("ext")))
+	})
+	r.MustCompile()
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/image/abc123.png", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got, want := rec.Body.String(), "abc123:png"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/image/ABC.png", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
 func TestRouterCatchAll(t *testing.T) {
 	r := New()
 	r.Get("/files/{path...}", func(w http.ResponseWriter, req *http.Request) {

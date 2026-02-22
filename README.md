@@ -53,6 +53,10 @@ func main() {
 		w.Write([]byte("name=" + req.PathValue("name")))
 	})
 
+	r.Get("/image/{id:[a-z0-9]+}.{ext:[a-z]+}", func(w http.ResponseWriter, req *http.Request) {
+		w.Write([]byte(req.PathValue("id") + "." + req.PathValue("ext")))
+	})
+
 	r.Get("/files/{path...}", func(w http.ResponseWriter, req *http.Request) {
 		w.Write([]byte("file=" + req.PathValue("path")))
 	})
@@ -198,6 +202,7 @@ func main() {
 - Params: `/{id}`
 - Constrained params (lightweight matcher, no `regexp`): `/{id:[0-9]+}`
 - Prefix/suffix constrained params: `/api/{name:[0-9]+}.json`
+- Multiple params in one segment: `/image/{id:[a-z0-9]+}.{ext:[a-z]+}`
 - Catch-all (last segment only): `/{path...}`
 - Priority: static > param > catch-all
 - No automatic path normalization or redirects
@@ -262,20 +267,21 @@ Selected results:
 
 | Benchmark | chi | httprouter | saruta | servemux |
 | --- | ---: | ---: | ---: | ---: |
-| Static lookup (ns/op) | 125.2 | 13.38 | 44.92 | 59.67 |
+| Static lookup (ns/op) | 374.1 | 17.66 | 60.64 | 65.91 |
 | Static lookup (allocs/op) | 2 | 0 | 0 | 0 |
-| Param lookup (ns/op) | 233.2 | 32.46 | 67.17 | 108.5 |
+| Param lookup (ns/op) | 259.7 | 39.22 | 87.74 | 133.8 |
 | Param lookup (allocs/op) | 4 | 1 | 0 | 1 |
-| Deep lookup (ns/op) | 124.5 | 12.99 | 44.73 | 205.3 |
+| Deep lookup (ns/op) | 190.7 | 18.03 | 62.91 | 229.2 |
 | Deep lookup (allocs/op) | 2 | 0 | 0 | 0 |
-| Scale 100 routes (ns/op) | 158.8 | 30.27 | 55.26 | 88.12 |
-| Scale 1,000 routes (ns/op) | 182.7 | 34.20 | 69.89 | 92.67 |
-| Scale 10,000 routes (ns/op) | 207.0 | 38.56 | 69.19 | 92.60 |
+| Scale 100 routes (ns/op) | 168.5 | 37.94 | 62.84 | 105.8 |
+| Scale 1,000 routes (ns/op) | 202.5 | 35.44 | 77.83 | 105.7 |
+| Scale 10,000 routes (ns/op) | 260.2 | 45.17 | 76.96 | 96.39 |
 
 Notes:
 
 - `saruta` now reaches `0 allocs/op` in the benchmarked lookup paths (static/param/deep/scale).
-- `saruta` uses a runtime radix tree and now beats `ServeMux` in the benchmarked static/param/deep/scale lookups on this machine.
+- `saruta` uses a runtime radix tree and remains `0 allocs/op` in the benchmarked lookup paths.
+- In this benchmark run, `saruta` outperforms `ServeMux` across the listed static/param/deep/scale cases.
 - `httprouter` is still faster in these microbenchmarks, especially on static/deep lookups.
 - `httprouter` is significantly faster in these cases, but uses a different API/model.
 - Benchmark numbers depend on CPU, Go version, and benchmark flags. Re-run on your target machine for production decisions.
