@@ -2,6 +2,8 @@
 
 `saruta` is a small radix-tree-based HTTP router for `net/http` with Go 1.22+ `PathValue()` support.
 
+It is named after Sarutahiko, a guide deity in Japanese mythology associated with roads and directions.
+
 ## Features
 
 - `net/http` compatible (`http.Handler`)
